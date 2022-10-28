@@ -1,0 +1,180 @@
+diff --git a/cmd/kubelet/app/server.go b/cmd/kubelet/app/server.go
+index c8a67942b17..2b27b8add99 100644
+--- a/cmd/kubelet/app/server.go
++++ b/cmd/kubelet/app/server.go
+@@ -32,6 +32,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	"github.com/coreos/go-systemd/v22/daemon"
+ 	"github.com/spf13/cobra"
+ 	"github.com/spf13/pflag"
+@@ -409,6 +410,10 @@ func UnsecuredDependencies(s *options.KubeletServer, featureGate featuregate.Fea
+ // Otherwise, the caller is assumed to have set up the Dependencies object and a default one will
+ // not be generated.
+ func Run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Dependencies, featureGate featuregate.FeatureGate) error {
++	start := time.Now()
++	lttng.ReportStartSpan(1, 0, "Run", start)
++	defer lttng.ReportEndSpan(1, time.Since(start))
++
+ 	// To help debugging, immediately log version
+ 	klog.InfoS("Kubelet version", "kubeletVersion", version.Get())
+ 
+@@ -1095,6 +1100,9 @@ func setContentTypeForClient(cfg *restclient.Config, contentType string) {
+ //
+ // Eventually, #2 will be replaced with instances of #3
+ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencies, runOnce bool) error {
++	ctx := lttng.ReportStart("RunKubelet")
++	defer ctx.End()
++
+ 	hostname, err := nodeutil.GetHostname(kubeServer.HostnameOverride)
+ 	if err != nil {
+ 		return err
+@@ -1143,6 +1151,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
+ 		return fmt.Errorf("the SeccompDefault feature gate must be enabled in order to use the SeccompDefault configuration")
+ 	}
+ 
++	initCtx := ctx.ReportChild("createAndInitKubelet")
+ 	k, err := createAndInitKubelet(kubeServer,
+ 		kubeDeps,
+ 		hostname,
+@@ -1152,6 +1161,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
+ 	if err != nil {
+ 		return fmt.Errorf("failed to create kubelet: %w", err)
+ 	}
++	initCtx.End()
+ 
+ 	// NewMainKubelet should have set up a pod source config if one didn't exist
+ 	// when the builder was run. This is just a precaution.
+@@ -1165,6 +1175,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
+ 	}
+ 
+ 	// process pods and exit.
++	runCtx := ctx.ReportChild("start kubelet")
+ 	if runOnce {
+ 		if _, err := k.RunOnce(podCfg.Updates()); err != nil {
+ 			return fmt.Errorf("runonce failed: %w", err)
+@@ -1174,6 +1185,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
+ 		startKubelet(k, podCfg, &kubeServer.KubeletConfiguration, kubeDeps, kubeServer.EnableServer)
+ 		klog.InfoS("Started kubelet")
+ 	}
++	runCtx.End()
+ 	return nil
+ }
+ 
+diff --git a/pkg/kubelet/config/apiserver.go b/pkg/kubelet/config/apiserver.go
+index b67f6c34fec..d076a18191f 100644
+--- a/pkg/kubelet/config/apiserver.go
++++ b/pkg/kubelet/config/apiserver.go
+@@ -19,6 +19,7 @@ package config
+ import (
+ 	"time"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	v1 "k8s.io/api/core/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/fields"
+@@ -61,7 +62,9 @@ func newSourceApiserverFromLW(lw cache.ListerWatcher, updates chan<- interface{}
+ 		for _, o := range objs {
+ 			pods = append(pods, o.(*v1.Pod))
+ 		}
++		ctx := lttng.ReportStart("sendPodUpdate")
+ 		updates <- kubetypes.PodUpdate{Pods: pods, Op: kubetypes.SET, Source: kubetypes.ApiserverSource}
++		ctx.End()
+ 	}
+ 	r := cache.NewReflector(lw, &v1.Pod{}, cache.NewUndeltaStore(send, cache.MetaNamespaceKeyFunc), 0)
+ 	go r.Run(wait.NeverStop)
+diff --git a/pkg/kubelet/kubelet.go b/pkg/kubelet/kubelet.go
+index 963d744e80f..823eb3c94b5 100644
+--- a/pkg/kubelet/kubelet.go
++++ b/pkg/kubelet/kubelet.go
+@@ -33,6 +33,7 @@ import (
+ 	"sync/atomic"
+ 	"time"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	"github.com/opencontainers/selinux/go-selinux"
+ 	"k8s.io/client-go/informers"
+ 
+@@ -2040,11 +2041,13 @@ func (kl *Kubelet) syncLoop(updates <-chan kubetypes.PodUpdate, handler SyncHand
+ 		// reset backoff if we have a success
+ 		duration = base
+ 
++		ctx := lttng.ReportStart("SyncLoopItteration")
+ 		kl.syncLoopMonitor.Store(kl.clock.Now())
+ 		if !kl.syncLoopIteration(updates, handler, syncTicker.C, housekeepingTicker.C, plegCh) {
+ 			break
+ 		}
+ 		kl.syncLoopMonitor.Store(kl.clock.Now())
++		ctx.End()
+ 	}
+ }
+ 
+@@ -2086,6 +2089,9 @@ func (kl *Kubelet) syncLoopIteration(configCh <-chan kubetypes.PodUpdate, handle
+ 	case u, open := <-configCh:
+ 		// Update from a config source; dispatch it to the right handler
+ 		// callback.
++		ctx := lttng.ReportStart("new Config update")
++		defer ctx.End()
++
+ 		if !open {
+ 			klog.ErrorS(nil, "Update channel is closed, exiting the sync loop")
+ 			return false
+@@ -2236,9 +2242,13 @@ func (kl *Kubelet) handleMirrorPod(mirrorPod *v1.Pod, start time.Time) {
+ // HandlePodAdditions is the callback in SyncHandler for pods being added from
+ // a config source.
+ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
++	ctx := lttng.ReportStart("HandlePodAdditions")
++	defer ctx.End()
++
+ 	start := kl.clock.Now()
+ 	sort.Sort(sliceutils.PodsByCreationTime(pods))
+ 	for _, pod := range pods {
++		podCtx := ctx.ReportChild("Handle single pod")
+ 		existingPods := kl.podManager.GetPods()
+ 		// Always add the pod to the pod manager. Kubelet relies on the pod
+ 		// manager as the source of truth for the desired state. If a pod does
+@@ -2270,12 +2280,15 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
+ 		}
+ 		mirrorPod, _ := kl.podManager.GetMirrorPodByPod(pod)
+ 		kl.dispatchWork(pod, kubetypes.SyncPodCreate, mirrorPod, start)
++		podCtx.End()
+ 	}
+ }
+ 
+ // HandlePodUpdates is the callback in the SyncHandler interface for pods
+ // being updated from a config source.
+ func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
++	ctx := lttng.ReportStart("HandlePodUpdates")
++	defer ctx.End()
+ 	start := kl.clock.Now()
+ 	for _, pod := range pods {
+ 		kl.podManager.UpdatePod(pod)
+@@ -2291,6 +2304,8 @@ func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
+ // HandlePodRemoves is the callback in the SyncHandler interface for pods
+ // being removed from a config source.
+ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
++	ctx := lttng.ReportStart("HandlePodRemoves")
++	defer ctx.End()
+ 	start := kl.clock.Now()
+ 	for _, pod := range pods {
+ 		kl.podManager.DeletePod(pod)
+@@ -2309,6 +2324,8 @@ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
+ // HandlePodReconcile is the callback in the SyncHandler interface for pods
+ // that should be reconciled.
+ func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
++	ctx := lttng.ReportStart("HandlePodReconcile")
++	defer ctx.End()
+ 	start := kl.clock.Now()
+ 	for _, pod := range pods {
+ 		// Update the pod in pod manager, status manager will do periodically reconcile according
+@@ -2333,6 +2350,8 @@ func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
+ // HandlePodSyncs is the callback in the syncHandler interface for pods
+ // that should be dispatched to pod workers for sync.
+ func (kl *Kubelet) HandlePodSyncs(pods []*v1.Pod) {
++	ctx := lttng.ReportStart("HandlePodSyncs")
++	defer ctx.End()
+ 	start := kl.clock.Now()
+ 	for _, pod := range pods {
+ 		mirrorPod, _ := kl.podManager.GetMirrorPodByPod(pod)
