@@ -33,7 +33,7 @@ Vagrant.configure("2") do |config|
     # install dependencies
     apt-get update
     sudo apt-get remove docker docker-engine docker.io containerd runc
-    apt-get install -y make git gcc build-essential jq python3-pip lttng-modules-dkms lttng-tools liblttng-ust-* apt-transport-https ca-certificates curl gnupg-agent software-properties-common zip unzip # docker
+    apt-get install -y make git gcc build-essential jq python3-pip lttng-modules-dkms lttng-tools liblttng-ust-* apt-transport-https ca-certificates curl gnupg-agent software-properties-common zip unzip golang-cfssl
     sudo pip install pyyaml
 
     # install go
