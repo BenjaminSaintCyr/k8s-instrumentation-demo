@@ -1,0 +1,4 @@
+*.~undo-tree~
+*.zip
+.vagrant/
+k8s/
