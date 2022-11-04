@@ -61,5 +61,8 @@ Vagrant.configure("2") do |config|
     # install benchmark
     git clone https://github.com/huaqiangwang/DeathStarBench-1/ benchmark
     (cd benchmark && git checkout 5a08c1ddf429d19b6549d3a24e13da98834d2b36)
+
+    # lttng setup
+    usermod -a -G tracing vagrant
   SHELL
 end
