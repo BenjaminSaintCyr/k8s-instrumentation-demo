@@ -42,8 +42,8 @@ build: k8s/ tracer
 
 update-patch: k8s/
 	mkdir -p bckp/
-	mv lttng-kubelet.patch bckp/
-	(cd k8s/ && git add cmd pkg vendor) # only want source code
+	mv lttng-kubelet.patch bckp/$(date +"%Y-%m-%d:%H:%S").patch
+	(cd k8s/ && git add cmd pkg) # only want source code
 	(cd k8s/ && git diff --cached > lttng-kubelet.patch)
 	cp k8s/lttng-kubelet.patch lttng-kubelet.patch
 
