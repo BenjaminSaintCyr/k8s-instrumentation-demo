@@ -86,7 +86,7 @@ index b67f6c34fec..d076a18191f 100644
  	r := cache.NewReflector(lw, &v1.Pod{}, cache.NewUndeltaStore(send, cache.MetaNamespaceKeyFunc), 0)
  	go r.Run(wait.NeverStop)
 diff --git a/pkg/kubelet/kubelet.go b/pkg/kubelet/kubelet.go
-index 963d744e80f..823eb3c94b5 100644
+index 963d744e80f..d527e994df5 100644
 --- a/pkg/kubelet/kubelet.go
 +++ b/pkg/kubelet/kubelet.go
 @@ -33,6 +33,7 @@ import (
@@ -131,11 +131,25 @@ index 963d744e80f..823eb3c94b5 100644
  	start := kl.clock.Now()
  	sort.Sort(sliceutils.PodsByCreationTime(pods))
  	for _, pod := range pods {
-+		podCtx := ctx.ReportChild("Handle single pod")
++		podCtx := ctx.ReportChild(fmt.Sprintf("Handle pod (%s, %s)", pod.UID, pod.Name))
  		existingPods := kl.podManager.GetPods()
  		// Always add the pod to the pod manager. Kubelet relies on the pod
  		// manager as the source of truth for the desired state. If a pod does
-@@ -2270,12 +2280,15 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
+@@ -2248,6 +2258,7 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
+ 
+ 		if kubetypes.IsMirrorPod(pod) {
+ 			kl.handleMirrorPod(pod, start)
++			podCtx.End()
+ 			continue
+ 		}
+ 
+@@ -2265,17 +2276,21 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
+ 			// Check if we can admit the pod; if not, reject it.
+ 			if ok, reason, message := kl.canAdmitPod(activePods, pod); !ok {
+ 				kl.rejectPod(pod, reason, message)
++				podCtx.End()
+ 				continue
+ 			}
  		}
  		mirrorPod, _ := kl.podManager.GetMirrorPodByPod(pod)
  		kl.dispatchWork(pod, kubetypes.SyncPodCreate, mirrorPod, start)
@@ -151,7 +165,7 @@ index 963d744e80f..823eb3c94b5 100644
  	start := kl.clock.Now()
  	for _, pod := range pods {
  		kl.podManager.UpdatePod(pod)
-@@ -2291,6 +2304,8 @@ func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
+@@ -2291,6 +2306,8 @@ func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
  // HandlePodRemoves is the callback in the SyncHandler interface for pods
  // being removed from a config source.
  func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
@@ -160,7 +174,7 @@ index 963d744e80f..823eb3c94b5 100644
  	start := kl.clock.Now()
  	for _, pod := range pods {
  		kl.podManager.DeletePod(pod)
-@@ -2309,6 +2324,8 @@ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
+@@ -2309,6 +2326,8 @@ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
  // HandlePodReconcile is the callback in the SyncHandler interface for pods
  // that should be reconciled.
  func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
@@ -169,7 +183,7 @@ index 963d744e80f..823eb3c94b5 100644
  	start := kl.clock.Now()
  	for _, pod := range pods {
  		// Update the pod in pod manager, status manager will do periodically reconcile according
-@@ -2333,6 +2350,8 @@ func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
+@@ -2333,6 +2352,8 @@ func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
  // HandlePodSyncs is the callback in the syncHandler interface for pods
  // that should be dispatched to pod workers for sync.
  func (kl *Kubelet) HandlePodSyncs(pods []*v1.Pod) {
@@ -178,3 +192,91 @@ index 963d744e80f..823eb3c94b5 100644
  	start := kl.clock.Now()
  	for _, pod := range pods {
  		mirrorPod, _ := kl.podManager.GetMirrorPodByPod(pod)
+diff --git a/pkg/kubelet/pod_workers.go b/pkg/kubelet/pod_workers.go
+index 9dad22b0b3e..f8ffe3bed34 100644
+--- a/pkg/kubelet/pod_workers.go
++++ b/pkg/kubelet/pod_workers.go
+@@ -23,6 +23,7 @@ import (
+ 	"sync"
+ 	"time"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	v1 "k8s.io/api/core/v1"
+ 	"k8s.io/apimachinery/pkg/types"
+ 	"k8s.io/apimachinery/pkg/util/runtime"
+@@ -745,10 +746,12 @@ func (p *podWorkers) UpdatePod(options UpdatePodOptions) {
+ 		// kubelet just restarted. In either case the kubelet is willing to believe
+ 		// the status of the pod for the first pod worker sync. See corresponding
+ 		// comment in syncPod.
++		ctx := lttng.ReportStart(fmt.Sprintf("POD(%s): new pod worker", pod.UID))
+ 		go func() {
+ 			defer runtime.HandleCrash()
+ 			p.managePodLoop(outCh)
+ 		}()
++		ctx.End()
+ 	}
+ 
+ 	// dispatch a request to the pod worker if none are running
+@@ -877,26 +880,37 @@ func (p *podWorkers) allowStaticPodStart(fullname string, uid types.UID) bool {
+ func (p *podWorkers) managePodLoop(podUpdates <-chan podWork) {
+ 	var lastSyncTime time.Time
+ 	var podStarted bool
++	var podStartCtx bool
++	var ctxStartup lttng.LttngCtx
+ 	for update := range podUpdates {
+ 		pod := update.Options.Pod
+ 
++		if !podStartCtx {
++			ctxStartup = lttng.ReportStart(fmt.Sprintf("POD(%s): pod is being managed", pod.UID))
++			podStartCtx = true
++		}
+ 		// Decide whether to start the pod. If the pod was terminated prior to the pod being allowed
+ 		// to start, we have to clean it up and then exit the pod worker loop.
+ 		if !podStarted {
+ 			canStart, canEverStart := p.allowPodStart(pod)
+ 			if !canEverStart {
++				ctx := lttng.ReportStart(fmt.Sprintf("POD(%s): Abort start", pod.UID))
+ 				p.completeUnstartedTerminated(pod)
+ 				if start := update.Options.StartTime; !start.IsZero() {
+ 					metrics.PodWorkerDuration.WithLabelValues("terminated").Observe(metrics.SinceInSeconds(start))
+ 				}
+ 				klog.V(4).InfoS("Processing pod event done", "pod", klog.KObj(pod), "podUID", pod.UID, "updateType", update.WorkType)
++				ctx.End()
+ 				return
+ 			}
+ 			if !canStart {
++				ctx := lttng.ReportStart(fmt.Sprintf("POD(%s): cannot start yet", pod.UID))
+ 				klog.V(4).InfoS("Pod cannot start yet", "pod", klog.KObj(pod), "podUID", pod.UID)
++				ctx.End()
+ 				continue
+ 			}
+ 			podStarted = true
++			ctxStartup.End()
+ 		}
+ 
+ 		klog.V(4).InfoS("Processing pod event", "pod", klog.KObj(pod), "podUID", pod.UID, "updateType", update.WorkType)
+@@ -966,7 +980,9 @@ func (p *podWorkers) managePodLoop(podUpdates <-chan podWork) {
+ 
+ 		case update.WorkType == TerminatedPodWork:
+ 			// we can shut down the worker
++			ctxTerminated := lttng.ReportStart(fmt.Sprintf("POD(%s): Terminaed", pod.UID))
+ 			p.completeTerminated(pod)
++			ctxTerminated.End()
+ 			if start := update.Options.StartTime; !start.IsZero() {
+ 				metrics.PodWorkerDuration.WithLabelValues("terminated").Observe(metrics.SinceInSeconds(start))
+ 			}
+@@ -995,7 +1011,14 @@ func (p *podWorkers) managePodLoop(podUpdates <-chan podWork) {
+ 		}
+ 
+ 		// queue a retry if necessary, then put the next event in the channel if any
++		var updateCtx lttng.LttngCtx
++		if phaseTransition {
++			updateCtx = lttng.ReportStart(fmt.Sprintf("POD(%s): state update", pod.UID))
++		}
+ 		p.completeWork(pod, phaseTransition, err)
++		if phaseTransition {
++			updateCtx.End()
++		}
+ 		if start := update.Options.StartTime; !start.IsZero() {
+ 			metrics.PodWorkerDuration.WithLabelValues(update.Options.UpdateType.String()).Observe(metrics.SinceInSeconds(start))
+ 		}
