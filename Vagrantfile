@@ -33,36 +33,34 @@ Vagrant.configure("2") do |config|
     # install dependencies
     apt-get update
     sudo apt-get remove docker docker-engine docker.io containerd runc
-    apt-get install -y make git gcc build-essential jq python3-pip lttng-modules-dkms lttng-tools liblttng-ust-* apt-transport-https ca-certificates curl gnupg-agent software-properties-common zip unzip golang-cfssl
+    apt-get install -y make git gcc build-essential jq python3-pip  apt-transport-https ca-certificates curl gnupg-agent software-properties-common zip unzip golang-cfssl libseccomp2
     sudo pip install pyyaml
 
     # install go
+    GO_VERSION=1.19
     wget -q https://go.dev/dl/go1.19.linux-amd64.tar.gz
-    tar -xf go1.19.linux-amd64.tar.gz
+    tar -xf go${GO_VERSION}.linux-amd64.tar.gz
     sudo rm -rf /usr/local/go && sudo mv go /usr/local
-    rm go1.19.linux-amd64.tar.gz
+    rm go${GO_VERSION}.linux-amd64.tar.gz
     echo "export PATH=$PATH:/usr/local/go/bin:/home/vagrant/go/bin" >> /home/vagrant/.profile
     echo "export PATH=$PATH:/usr/local/go/bin:/home/vagrant/go/bin" >> /root/.profile
     export PATH=$PATH:/usr/local/go/bin:/home/vagrant/go/bin
 
-    # install docker and containerd
+    # install cri-containerd
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
     sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
     sudo apt-get update
     sudo apt-get install -y docker-ce docker-ce-cli containerd.io
     sudo usermod -aG docker vagrant
-
-    ## install etcd
-    # k8s/hack/install-etcd.sh
-    # echo "export PATH=/home/vagrant/k8s/third_party/etcd:$PATH" >> /home/vagrant/.profile
-    # echo "export PATH=/home/vagrant/k8s/third_party/etcd:$PATH" >> /root/.profile
-    # export PATH="/home/vagrant/k8s/third_party/etcd:${PATH}"
+    sudo systemctl start containerd
 
     # install benchmark
     git clone https://github.com/huaqiangwang/DeathStarBench-1/ benchmark
     (cd benchmark && git checkout 5a08c1ddf429d19b6549d3a24e13da98834d2b36)
 
     # lttng setup
+    sudo apt install -y linux-headers-$(uname -r)
+    sudo apt install -y lttng-modules-dkms lttng-tools liblttng-ust-*
     usermod -a -G tracing vagrant
   SHELL
 end
