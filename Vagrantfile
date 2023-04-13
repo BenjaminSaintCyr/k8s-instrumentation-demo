@@ -20,7 +20,7 @@ Vagrant.configure("2") do |config|
 
     # Customize the amount of memory on the VM:
     vb.memory = 10096 # MB
-    vb.cpus = 7
+    vb.cpus = 4
   end
 
   # Enable provisioning with a shell script. Additional provisioners such as
@@ -33,12 +33,12 @@ Vagrant.configure("2") do |config|
     # install dependencies
     apt-get update
     sudo apt-get remove docker docker-engine docker.io containerd runc
-    apt-get install -y make git gcc build-essential jq python3-pip  apt-transport-https ca-certificates curl gnupg-agent software-properties-common zip unzip golang-cfssl libseccomp2
+    apt-get install -y make git gcc build-essential jq python3-pip  apt-transport-https ca-certificates curl gnupg-agent software-properties-common zip unzip golang-cfssl libseccomp2 net-tools
     sudo pip install pyyaml
 
     # install go
     GO_VERSION=1.19
-    wget -q https://go.dev/dl/go1.19.linux-amd64.tar.gz
+    wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
     tar -xf go${GO_VERSION}.linux-amd64.tar.gz
     sudo rm -rf /usr/local/go && sudo mv go /usr/local
     rm go${GO_VERSION}.linux-amd64.tar.gz

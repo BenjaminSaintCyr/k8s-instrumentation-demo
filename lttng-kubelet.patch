@@ -1,5 +1,17 @@
+diff --git a/build/build-image/Dockerfile b/build/build-image/Dockerfile
+index 4473935769b..3b99c9be2ad 100644
+--- a/build/build-image/Dockerfile
++++ b/build/build-image/Dockerfile
+@@ -18,6 +18,7 @@ ARG KUBE_CROSS_VERSION
+ 
+ FROM ${KUBE_CROSS_IMAGE}:${KUBE_CROSS_VERSION}
+ 
++RUN apt update && apt install -y liblttng-ust-dev
+ # Mark this as a kube-build container
+ RUN touch /kube-build-image
+ 
 diff --git a/cmd/kubelet/app/server.go b/cmd/kubelet/app/server.go
-index c8a67942b17..2b27b8add99 100644
+index c8a67942b17..b9a9149781f 100644
 --- a/cmd/kubelet/app/server.go
 +++ b/cmd/kubelet/app/server.go
 @@ -32,6 +32,7 @@ import (
@@ -10,61 +22,125 @@ index c8a67942b17..2b27b8add99 100644
  	"github.com/coreos/go-systemd/v22/daemon"
  	"github.com/spf13/cobra"
  	"github.com/spf13/pflag"
-@@ -409,6 +410,10 @@ func UnsecuredDependencies(s *options.KubeletServer, featureGate featuregate.Fea
+@@ -409,6 +410,9 @@ func UnsecuredDependencies(s *options.KubeletServer, featureGate featuregate.Fea
  // Otherwise, the caller is assumed to have set up the Dependencies object and a default one will
  // not be generated.
  func Run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Dependencies, featureGate featuregate.FeatureGate) error {
-+	start := time.Now()
-+	lttng.ReportStartSpan(1, 0, "Run", start)
-+	defer lttng.ReportEndSpan(1, time.Since(start))
++	lttngCtx := lttng.ReportStart("Run", "start of kubelet")
++	defer lttngCtx.End("End of run")
 +
  	// To help debugging, immediately log version
  	klog.InfoS("Kubelet version", "kubeletVersion", version.Get())
  
-@@ -1095,6 +1100,9 @@ func setContentTypeForClient(cfg *restclient.Config, contentType string) {
+@@ -1095,6 +1099,9 @@ func setContentTypeForClient(cfg *restclient.Config, contentType string) {
  //
  // Eventually, #2 will be replaced with instances of #3
  func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencies, runOnce bool) error {
-+	ctx := lttng.ReportStart("RunKubelet")
-+	defer ctx.End()
++	ctx := lttng.ReportStart("RunKubelet", "")
++	defer ctx.End("")
 +
  	hostname, err := nodeutil.GetHostname(kubeServer.HostnameOverride)
  	if err != nil {
  		return err
-@@ -1143,6 +1151,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
+@@ -1143,6 +1150,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
  		return fmt.Errorf("the SeccompDefault feature gate must be enabled in order to use the SeccompDefault configuration")
  	}
  
-+	initCtx := ctx.ReportChild("createAndInitKubelet")
++	initCtx := ctx.ReportChild("createAndInitKubelet", "")
  	k, err := createAndInitKubelet(kubeServer,
  		kubeDeps,
  		hostname,
-@@ -1152,6 +1161,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
+@@ -1152,6 +1160,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
  	if err != nil {
  		return fmt.Errorf("failed to create kubelet: %w", err)
  	}
-+	initCtx.End()
++	initCtx.End("")
  
  	// NewMainKubelet should have set up a pod source config if one didn't exist
  	// when the builder was run. This is just a precaution.
-@@ -1165,6 +1175,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
+@@ -1165,6 +1174,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
  	}
  
  	// process pods and exit.
-+	runCtx := ctx.ReportChild("start kubelet")
++	runCtx := ctx.ReportChild("start kubelet", "")
  	if runOnce {
  		if _, err := k.RunOnce(podCfg.Updates()); err != nil {
  			return fmt.Errorf("runonce failed: %w", err)
-@@ -1174,6 +1185,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
+@@ -1174,6 +1184,7 @@ func RunKubelet(kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencie
  		startKubelet(k, podCfg, &kubeServer.KubeletConfiguration, kubeDeps, kubeServer.EnableServer)
  		klog.InfoS("Started kubelet")
  	}
-+	runCtx.End()
++	runCtx.End("")
  	return nil
  }
  
+diff --git a/hack/lib/golang.sh b/hack/lib/golang.sh
+index 232c17b36c1..4290fb95d3b 100755
+--- a/hack/lib/golang.sh
++++ b/hack/lib/golang.sh
+@@ -748,7 +748,7 @@ kube::golang::build_binaries_for_platform() {
+       -ldflags="${goldflags}"
+       -tags="${gotags:-}"
+     )
+-    CGO_ENABLED=0 kube::golang::build_some_binaries "${statics[@]}"
++    CGO_ENABLED=1 kube::golang::build_some_binaries "${statics[@]}"
+   fi
+ 
+   if [[ "${#nonstatics[@]}" != 0 ]]; then
+diff --git a/pkg/api/pod/util.go b/pkg/api/pod/util.go
+index 9dcb21d6dc4..6e62e193bea 100644
+--- a/pkg/api/pod/util.go
++++ b/pkg/api/pod/util.go
+@@ -19,6 +19,7 @@ package pod
+ import (
+ 	"strings"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	v1 "k8s.io/api/core/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+@@ -269,6 +270,13 @@ func GetPodCondition(status *api.PodStatus, conditionType api.PodConditionType)
+ // status has changed.
+ // Returns true if pod condition has changed or has been added.
+ func UpdatePodCondition(status *api.PodStatus, condition *api.PodCondition) bool {
++	var context string
++	for _, cStat := range status.ContainerStatuses {
++		context += cStat.ContainerID + ","
++	}
++	ctx := lttng.ReportStart(string(condition.Type), context)
++	defer ctx.End("")
++
+ 	condition.LastTransitionTime = metav1.Now()
+ 	// Try to find this pod condition.
+ 	conditionIndex, oldCondition := GetPodCondition(status, condition.Type)
+diff --git a/pkg/api/v1/pod/util.go b/pkg/api/v1/pod/util.go
+index 8cefc94641e..3b383961fe7 100644
+--- a/pkg/api/v1/pod/util.go
++++ b/pkg/api/v1/pod/util.go
+@@ -20,6 +20,7 @@ import (
+ 	"fmt"
+ 	"time"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	v1 "k8s.io/api/core/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/util/intstr"
+@@ -358,6 +359,13 @@ func GetPodConditionFromList(conditions []v1.PodCondition, conditionType v1.PodC
+ // status has changed.
+ // Returns true if pod condition has changed or has been added.
+ func UpdatePodCondition(status *v1.PodStatus, condition *v1.PodCondition) bool {
++	var context string
++	for _, cStat := range status.ContainerStatuses {
++		context += cStat.ContainerID + ","
++	}
++	ctx := lttng.ReportStart(string(condition.Type), "v1"+context)
++	defer ctx.End("")
++
+ 	condition.LastTransitionTime = metav1.Now()
+ 	// Try to find this pod condition.
+ 	conditionIndex, oldCondition := GetPodCondition(status, condition.Type)
 diff --git a/pkg/kubelet/config/apiserver.go b/pkg/kubelet/config/apiserver.go
-index b67f6c34fec..d076a18191f 100644
+index b67f6c34fec..a98b2cb70af 100644
 --- a/pkg/kubelet/config/apiserver.go
 +++ b/pkg/kubelet/config/apiserver.go
 @@ -19,6 +19,7 @@ package config
@@ -79,14 +155,14 @@ index b67f6c34fec..d076a18191f 100644
  		for _, o := range objs {
  			pods = append(pods, o.(*v1.Pod))
  		}
-+		ctx := lttng.ReportStart("sendPodUpdate")
++		ctx := lttng.ReportStart("sendPodUpdate", "")
  		updates <- kubetypes.PodUpdate{Pods: pods, Op: kubetypes.SET, Source: kubetypes.ApiserverSource}
-+		ctx.End()
++		ctx.End("")
  	}
  	r := cache.NewReflector(lw, &v1.Pod{}, cache.NewUndeltaStore(send, cache.MetaNamespaceKeyFunc), 0)
  	go r.Run(wait.NeverStop)
 diff --git a/pkg/kubelet/kubelet.go b/pkg/kubelet/kubelet.go
-index 963d744e80f..d527e994df5 100644
+index 963d744e80f..f501a7026ec 100644
 --- a/pkg/kubelet/kubelet.go
 +++ b/pkg/kubelet/kubelet.go
 @@ -33,6 +33,7 @@ import (
@@ -101,13 +177,13 @@ index 963d744e80f..d527e994df5 100644
  		// reset backoff if we have a success
  		duration = base
  
-+		ctx := lttng.ReportStart("SyncLoopItteration")
++		// ctx := lttng.ReportStart("SyncLoopItteration", "")
  		kl.syncLoopMonitor.Store(kl.clock.Now())
  		if !kl.syncLoopIteration(updates, handler, syncTicker.C, housekeepingTicker.C, plegCh) {
  			break
  		}
  		kl.syncLoopMonitor.Store(kl.clock.Now())
-+		ctx.End()
++		// ctx.End("")
  	}
  }
  
@@ -115,8 +191,8 @@ index 963d744e80f..d527e994df5 100644
  	case u, open := <-configCh:
  		// Update from a config source; dispatch it to the right handler
  		// callback.
-+		ctx := lttng.ReportStart("new Config update")
-+		defer ctx.End()
++		ctx := lttng.ReportStart("new Config update", "")
++		defer ctx.End("")
 +
  		if !open {
  			klog.ErrorS(nil, "Update channel is closed, exiting the sync loop")
@@ -125,13 +201,13 @@ index 963d744e80f..d527e994df5 100644
  // HandlePodAdditions is the callback in SyncHandler for pods being added from
  // a config source.
  func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
-+	ctx := lttng.ReportStart("HandlePodAdditions")
-+	defer ctx.End()
++	ctx := lttng.ReportStart("HandlePodAdditions", "")
++	defer ctx.End("")
 +
  	start := kl.clock.Now()
  	sort.Sort(sliceutils.PodsByCreationTime(pods))
  	for _, pod := range pods {
-+		podCtx := ctx.ReportChild(fmt.Sprintf("Handle pod (%s, %s)", pod.UID, pod.Name))
++		podCtx := ctx.ReportChild("HandlePodAddition", "UID: "+string(pod.UID)+", Name: "+pod.Name)
  		existingPods := kl.podManager.GetPods()
  		// Always add the pod to the pod manager. Kubelet relies on the pod
  		// manager as the source of truth for the desired state. If a pod does
@@ -139,61 +215,97 @@ index 963d744e80f..d527e994df5 100644
  
  		if kubetypes.IsMirrorPod(pod) {
  			kl.handleMirrorPod(pod, start)
-+			podCtx.End()
++			podCtx.End("")
  			continue
  		}
  
-@@ -2265,17 +2276,21 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
+@@ -2265,19 +2276,24 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
  			// Check if we can admit the pod; if not, reject it.
  			if ok, reason, message := kl.canAdmitPod(activePods, pod); !ok {
  				kl.rejectPod(pod, reason, message)
-+				podCtx.End()
++				podCtx.End("")
  				continue
  			}
  		}
  		mirrorPod, _ := kl.podManager.GetMirrorPodByPod(pod)
  		kl.dispatchWork(pod, kubetypes.SyncPodCreate, mirrorPod, start)
-+		podCtx.End()
++		podCtx.End("")
  	}
  }
  
  // HandlePodUpdates is the callback in the SyncHandler interface for pods
  // being updated from a config source.
  func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
-+	ctx := lttng.ReportStart("HandlePodUpdates")
-+	defer ctx.End()
++	ctx := lttng.ReportStart("HandlePodUpdates", "")
++	defer ctx.End("")
  	start := kl.clock.Now()
  	for _, pod := range pods {
++		podCtx := ctx.ReportChild("HandlePodUpdate", "UID: "+string(pod.UID)+", Name: "+pod.Name)
  		kl.podManager.UpdatePod(pod)
-@@ -2291,6 +2306,8 @@ func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
+ 		if kubetypes.IsMirrorPod(pod) {
+ 			kl.handleMirrorPod(pod, start)
+@@ -2285,14 +2301,18 @@ func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
+ 		}
+ 		mirrorPod, _ := kl.podManager.GetMirrorPodByPod(pod)
+ 		kl.dispatchWork(pod, kubetypes.SyncPodUpdate, mirrorPod, start)
++		podCtx.End("")
+ 	}
+ }
+ 
  // HandlePodRemoves is the callback in the SyncHandler interface for pods
  // being removed from a config source.
  func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
-+	ctx := lttng.ReportStart("HandlePodRemoves")
-+	defer ctx.End()
++	ctx := lttng.ReportStart("HandlePodRemoves", "")
++	defer ctx.End("")
  	start := kl.clock.Now()
  	for _, pod := range pods {
++		podCtx := ctx.ReportChild("HandlePodRemove", "UID: "+string(pod.UID)+", Name: "+pod.Name)
  		kl.podManager.DeletePod(pod)
-@@ -2309,6 +2326,8 @@ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
+ 		if kubetypes.IsMirrorPod(pod) {
+ 			kl.handleMirrorPod(pod, start)
+@@ -2303,14 +2323,18 @@ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
+ 		if err := kl.deletePod(pod); err != nil {
+ 			klog.V(2).InfoS("Failed to delete pod", "pod", klog.KObj(pod), "err", err)
+ 		}
++		podCtx.End("")
+ 	}
+ }
+ 
  // HandlePodReconcile is the callback in the SyncHandler interface for pods
  // that should be reconciled.
  func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
-+	ctx := lttng.ReportStart("HandlePodReconcile")
-+	defer ctx.End()
++	ctx := lttng.ReportStart("HandlePodReconcile", "")
++	defer ctx.End("")
  	start := kl.clock.Now()
  	for _, pod := range pods {
++		podCtx := ctx.ReportChild("HandlePodUpdate", "UID: "+string(pod.UID)+", Name: "+pod.Name)
  		// Update the pod in pod manager, status manager will do periodically reconcile according
-@@ -2333,6 +2352,8 @@ func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
+ 		// to the pod manager.
+ 		kl.podManager.UpdatePod(pod)
+@@ -2327,16 +2351,21 @@ func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
+ 				kl.containerDeletor.deleteContainersInPod("", podStatus, true)
+ 			}
+ 		}
++		podCtx.End("")
+ 	}
+ }
+ 
  // HandlePodSyncs is the callback in the syncHandler interface for pods
  // that should be dispatched to pod workers for sync.
  func (kl *Kubelet) HandlePodSyncs(pods []*v1.Pod) {
-+	ctx := lttng.ReportStart("HandlePodSyncs")
-+	defer ctx.End()
++	ctx := lttng.ReportStart("HandlePodSyncs", "")
++	defer ctx.End("")
  	start := kl.clock.Now()
  	for _, pod := range pods {
++		podCtx := ctx.ReportChild("HandlePodUpdate", "UID: "+string(pod.UID)+", Name: "+pod.Name)
  		mirrorPod, _ := kl.podManager.GetMirrorPodByPod(pod)
+ 		kl.dispatchWork(pod, kubetypes.SyncPodSync, mirrorPod, start)
++		podCtx.End("")
+ 	}
+ }
+ 
 diff --git a/pkg/kubelet/pod_workers.go b/pkg/kubelet/pod_workers.go
-index 9dad22b0b3e..f8ffe3bed34 100644
+index 9dad22b0b3e..84adab25400 100644
 --- a/pkg/kubelet/pod_workers.go
 +++ b/pkg/kubelet/pod_workers.go
 @@ -23,6 +23,7 @@ import (
@@ -208,12 +320,12 @@ index 9dad22b0b3e..f8ffe3bed34 100644
  		// kubelet just restarted. In either case the kubelet is willing to believe
  		// the status of the pod for the first pod worker sync. See corresponding
  		// comment in syncPod.
-+		ctx := lttng.ReportStart(fmt.Sprintf("POD(%s): new pod worker", pod.UID))
++		ctx := lttng.ReportStart("new pod worker", string(pod.UID))
  		go func() {
  			defer runtime.HandleCrash()
  			p.managePodLoop(outCh)
  		}()
-+		ctx.End()
++		ctx.End("")
  	}
  
  	// dispatch a request to the pod worker if none are running
@@ -222,12 +334,12 @@ index 9dad22b0b3e..f8ffe3bed34 100644
  	var lastSyncTime time.Time
  	var podStarted bool
 +	var podStartCtx bool
-+	var ctxStartup lttng.LttngCtx
++	var ctxStartup lttng.Ctx
  	for update := range podUpdates {
  		pod := update.Options.Pod
  
 +		if !podStartCtx {
-+			ctxStartup = lttng.ReportStart(fmt.Sprintf("POD(%s): pod is being managed", pod.UID))
++			ctxStartup = lttng.ReportStart("pod is being managed", string(pod.UID))
 +			podStartCtx = true
 +		}
  		// Decide whether to start the pod. If the pod was terminated prior to the pod being allowed
@@ -235,23 +347,23 @@ index 9dad22b0b3e..f8ffe3bed34 100644
  		if !podStarted {
  			canStart, canEverStart := p.allowPodStart(pod)
  			if !canEverStart {
-+				ctx := lttng.ReportStart(fmt.Sprintf("POD(%s): Abort start", pod.UID))
++				ctx := lttng.ReportStart("Abort start", string(pod.UID))
  				p.completeUnstartedTerminated(pod)
  				if start := update.Options.StartTime; !start.IsZero() {
  					metrics.PodWorkerDuration.WithLabelValues("terminated").Observe(metrics.SinceInSeconds(start))
  				}
  				klog.V(4).InfoS("Processing pod event done", "pod", klog.KObj(pod), "podUID", pod.UID, "updateType", update.WorkType)
-+				ctx.End()
++				ctx.End("")
  				return
  			}
  			if !canStart {
-+				ctx := lttng.ReportStart(fmt.Sprintf("POD(%s): cannot start yet", pod.UID))
++				ctx := lttng.ReportStart("cannot start yet", string(pod.UID))
  				klog.V(4).InfoS("Pod cannot start yet", "pod", klog.KObj(pod), "podUID", pod.UID)
-+				ctx.End()
++				ctx.End("")
  				continue
  			}
  			podStarted = true
-+			ctxStartup.End()
++			ctxStartup.End("")
  		}
  
  		klog.V(4).InfoS("Processing pod event", "pod", klog.KObj(pod), "podUID", pod.UID, "updateType", update.WorkType)
@@ -259,9 +371,9 @@ index 9dad22b0b3e..f8ffe3bed34 100644
  
  		case update.WorkType == TerminatedPodWork:
  			// we can shut down the worker
-+			ctxTerminated := lttng.ReportStart(fmt.Sprintf("POD(%s): Terminaed", pod.UID))
++			ctxTerminated := lttng.ReportStart("Terminaed", string(pod.UID))
  			p.completeTerminated(pod)
-+			ctxTerminated.End()
++			ctxTerminated.End("")
  			if start := update.Options.StartTime; !start.IsZero() {
  				metrics.PodWorkerDuration.WithLabelValues("terminated").Observe(metrics.SinceInSeconds(start))
  			}
@@ -269,14 +381,86 @@ index 9dad22b0b3e..f8ffe3bed34 100644
  		}
  
  		// queue a retry if necessary, then put the next event in the channel if any
-+		var updateCtx lttng.LttngCtx
++		var updateCtx lttng.Ctx
 +		if phaseTransition {
-+			updateCtx = lttng.ReportStart(fmt.Sprintf("POD(%s): state update", pod.UID))
++			updateCtx = lttng.ReportStart("state update", string(pod.UID))
 +		}
  		p.completeWork(pod, phaseTransition, err)
 +		if phaseTransition {
-+			updateCtx.End()
++			updateCtx.End("")
 +		}
  		if start := update.Options.StartTime; !start.IsZero() {
  			metrics.PodWorkerDuration.WithLabelValues(update.Options.UpdateType.String()).Observe(metrics.SinceInSeconds(start))
  		}
+diff --git a/pkg/registry/core/pod/storage/storage.go b/pkg/registry/core/pod/storage/storage.go
+index db21b59da4d..53625b4e036 100644
+--- a/pkg/registry/core/pod/storage/storage.go
++++ b/pkg/registry/core/pod/storage/storage.go
+@@ -22,6 +22,7 @@ import (
+ 	"net/http"
+ 	"net/url"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	"k8s.io/apimachinery/pkg/api/errors"
+ 	"k8s.io/apimachinery/pkg/api/meta"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+@@ -228,10 +229,13 @@ func (r *BindingREST) setPodHostAndAnnotations(ctx context.Context, podUID types
+ 		for k, v := range annotations {
+ 			pod.Annotations[k] = v
+ 		}
++
++		ctx := lttng.ReportStart(string(api.PodScheduled), string(pod.UID))
+ 		podutil.UpdatePodCondition(&pod.Status, &api.PodCondition{
+ 			Type:   api.PodScheduled,
+ 			Status: api.ConditionTrue,
+ 		})
++		ctx.End("")
+ 		finalPod = pod
+ 		return pod, nil
+ 	}), dryRun, nil)
+diff --git a/pkg/scheduler/schedule_one.go b/pkg/scheduler/schedule_one.go
+index 9d339048c02..0b6c07abf2a 100644
+--- a/pkg/scheduler/schedule_one.go
++++ b/pkg/scheduler/schedule_one.go
+@@ -25,6 +25,7 @@ import (
+ 	"sync/atomic"
+ 	"time"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	v1 "k8s.io/api/core/v1"
+ 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+@@ -900,9 +901,13 @@ func updatePod(ctx context.Context, client clientset.Interface, pod *v1.Pod, con
+ 	// NominatedNodeName is updated only if we are trying to set it, and the value is
+ 	// different from the existing one.
+ 	nnnNeedsUpdate := nominatingInfo.Mode() == framework.ModeOverride && pod.Status.NominatedNodeName != nominatingInfo.NominatedNodeName
++
++	lttngCtx := lttng.ReportStart(string(api.PodScheduled), string(pod.UID))
+ 	if !podutil.UpdatePodCondition(podStatusCopy, condition) && !nnnNeedsUpdate {
++		lttngCtx.End("False update")
+ 		return nil
+ 	}
++	lttngCtx.End("")
+ 	if nnnNeedsUpdate {
+ 		podStatusCopy.NominatedNodeName = nominatingInfo.NominatedNodeName
+ 	}
+diff --git a/vendor/k8s.io/klog/v2/klog.go b/vendor/k8s.io/klog/v2/klog.go
+index 652fadcd4e4..30b9238e685 100644
+--- a/vendor/k8s.io/klog/v2/klog.go
++++ b/vendor/k8s.io/klog/v2/klog.go
+@@ -92,6 +92,7 @@ import (
+ 	"sync/atomic"
+ 	"time"
+ 
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ 	"github.com/go-logr/logr"
+ 
+ 	"k8s.io/klog/v2/internal/buffer"
+@@ -1480,6 +1481,7 @@ func InfofDepth(depth int, format string, args ...interface{}) {
+ // output:
+ // >> I1025 00:15:15.525108       1 controller_utils.go:116] "Pod status updated" pod="kubedns" status="ready"
+ func InfoS(msg string, keysAndValues ...interface{}) {
++	lttng.TraceKlog(msg, "")
+ 	logging.infoS(logging.logger, logging.filter, 0, msg, keysAndValues...)
+ }
+ 

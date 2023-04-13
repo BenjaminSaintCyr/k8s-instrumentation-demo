@@ -4,14 +4,14 @@ KUBE_CONFIG=/var/run/kubernetes/admin.kubeconfig
 DEATHSTAR_DIR=benchmark
 SCALABILITY_DIR=perf-tests
 
-all: patch vendor tracer
+all: | patch vendor tracer
 	(cd k8s && make WHAT="cmd/kubectl cmd/kube-apiserver cmd/kube-controller-manager cmd/cloud-controller-manager cmd/kubelet cmd/kube-proxy cmd/kube-scheduler")
 
 vagrant:
 	vagrant up
 	vagrant scp Makefile .
-	vagrant scp k8s.zip .
 	vagrant scp lttng-kubelet.patch .
+	vagrant scp k8s.zip .
 	vagrant ssh -- make restore
 
 # * Install
@@ -48,7 +48,7 @@ patch: k8s/
 tracer:
 	(cd k8s/vendor/github.com/BenjaminSaintCyr/k8s-lttng-tpp/ && make clean && make) # build tracer
 
-build: k8s/ tracer
+build: | k8s/ tracer
 	(cd k8s	&& KUBE_CGO_OVERRIDES=kubelet make WHAT=cmd/kubelet) # build kubelet
 
 update-patch: k8s/
@@ -66,24 +66,19 @@ trace:
 	lttng enable-event -u -a
 	lttng enable-event -k -a
 	lttng add-context -u -t vpid -t vtid -t procname
+	lttng add-context -k -t pid -t tid -t procname
 	lttng start
-
-k8s/third_party/etcd:
-	k8s/hack/install-etcd.sh | tail -n 1 >> ~/.bashrc
-
-etcd: k8s/third_party/etcd
-	export PATH="/home/vagrant/k8s/third_party/etcd:${PATH}"
 
 run: etcd
 	sudo swapoff -a
-	sudo containerd &
 	sudo rm -r /tmp/kube*
 	k8s/hack/local-up-cluster.sh -O &
+	export KUBECONFIG=/var/run/kubernetes/admin.kubeconfig && alias kubectl="bash /home/ben/Documents/DORSAL/Projects/codebase/k8s/cluster/kubectl.sh"
 
 # * Benchmark
 
 benchmark-simple: trace
-  -k8s/cluster/kubectl.sh apply --wait=true -f https://k8s.io/examples/controllers/nginx-deployment.yaml
+	-k8s/cluster/kubectl.sh apply --wait=true -f https://k8s.io/examples/controllers/nginx-deployment.yaml
 	sleep 5
 	-k8s/cluster/kubectl.sh  delete --wait=true -f https://k8s.io/examples/controllers/nginx-deployment.yaml
 	sleep 5
@@ -105,6 +100,14 @@ benchmark-deathstar: $(DEATHSTAR_DIR)/ trace
 
 $(SCALABILITY_DIR)/:
 	git clone --depth 1 https://github.com/kubernetes/perf-tests.git $(SCALABILITY_DIR)/
+
+clusterloader-demo/:
+	vagrant scp clusterloader-demo/ .
+	vagrant ssh -- make benchmark-clusterloader-demo
+
+benchmark-clusterloader-demo: $(SCALABILITY_DIR)/ trace
+	-(cd $(SCALABILITY_DIR)/clusterloader2 && go run cmd/clusterloader.go --testconfig=$(HOME)/clusterloader-demo/config.yaml --provider=local --kubeconfig=$(KUBE_CONFIG) --v=2)
+	lttng destroy
 
 benchmark-clusterloader2: $(SCALABILITY_DIR)/ trace
 	-(cd $(SCALABILITY_DIR)/clusterloader2 && go run cmd/clusterloader.go --testconfig=testing/load/config.yaml --provider=local --kubeconfig=$(KUBE_CONFIG) --v=2)
