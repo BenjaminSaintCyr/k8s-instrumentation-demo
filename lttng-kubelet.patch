@@ -419,7 +419,7 @@ index db21b59da4d..53625b4e036 100644
  		return pod, nil
  	}), dryRun, nil)
 diff --git a/pkg/scheduler/schedule_one.go b/pkg/scheduler/schedule_one.go
-index 9d339048c02..0b6c07abf2a 100644
+index 9d339048c02..42c9e558bb9 100644
 --- a/pkg/scheduler/schedule_one.go
 +++ b/pkg/scheduler/schedule_one.go
 @@ -25,6 +25,7 @@ import (
@@ -435,7 +435,7 @@ index 9d339048c02..0b6c07abf2a 100644
  	// different from the existing one.
  	nnnNeedsUpdate := nominatingInfo.Mode() == framework.ModeOverride && pod.Status.NominatedNodeName != nominatingInfo.NominatedNodeName
 +
-+	lttngCtx := lttng.ReportStart(string(api.PodScheduled), string(pod.UID))
++	lttngCtx := lttng.ReportStart("PodScheduled (outer)", string(pod.UID))
  	if !podutil.UpdatePodCondition(podStatusCopy, condition) && !nnnNeedsUpdate {
 +		lttngCtx.End("False update")
  		return nil
@@ -444,23 +444,78 @@ index 9d339048c02..0b6c07abf2a 100644
  	if nnnNeedsUpdate {
  		podStatusCopy.NominatedNodeName = nominatingInfo.NominatedNodeName
  	}
-diff --git a/vendor/k8s.io/klog/v2/klog.go b/vendor/k8s.io/klog/v2/klog.go
-index 652fadcd4e4..30b9238e685 100644
---- a/vendor/k8s.io/klog/v2/klog.go
-+++ b/vendor/k8s.io/klog/v2/klog.go
-@@ -92,6 +92,7 @@ import (
- 	"sync/atomic"
+diff --git a/staging/src/k8s.io/client-go/go.mod b/staging/src/k8s.io/client-go/go.mod
+index 2380b39b698..34e35b63934 100644
+--- a/staging/src/k8s.io/client-go/go.mod
++++ b/staging/src/k8s.io/client-go/go.mod
+@@ -34,6 +34,7 @@ require (
+ )
+ 
+ require (
++	github.com/BenjaminSaintCyr/k8s-lttng-tpp v0.0.0-20230213211120-a8fe8717c213 // indirect
+ 	github.com/PuerkitoBio/purell v1.1.1 // indirect
+ 	github.com/PuerkitoBio/urlesc v0.0.0-20170810143723-de5bf2ad4578 // indirect
+ 	github.com/emicklei/go-restful/v3 v3.8.0 // indirect
+diff --git a/staging/src/k8s.io/client-go/go.sum b/staging/src/k8s.io/client-go/go.sum
+index 179a247c8e0..d2e130874ed 100644
+--- a/staging/src/k8s.io/client-go/go.sum
++++ b/staging/src/k8s.io/client-go/go.sum
+@@ -31,6 +31,8 @@ cloud.google.com/go/storage v1.6.0/go.mod h1:N7U0C8pVQ/+NIKOBQyamJIeKQKkZ+mxpohl
+ cloud.google.com/go/storage v1.8.0/go.mod h1:Wv1Oy7z6Yz3DshWRJFhqM/UCfaWIRTdp0RXyy7KQOVs=
+ cloud.google.com/go/storage v1.10.0/go.mod h1:FLPqc6j+Ki4BU591ie1oL6qBQGu2Bl/tZ9ullr3+Kg0=
+ dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
++github.com/BenjaminSaintCyr/k8s-lttng-tpp v0.0.0-20230213211120-a8fe8717c213 h1:gYrMs0fDWG1rdTW/85l/xiXVJQ7aulqpH6mcK/xHDMo=
++github.com/BenjaminSaintCyr/k8s-lttng-tpp v0.0.0-20230213211120-a8fe8717c213/go.mod h1:qWZsneKmrkB5LlGN6y5LAtR/LvzoNAHePyLz2VAG61k=
+ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
+ github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
+ github.com/PuerkitoBio/purell v1.1.1 h1:WEQqlqaGbrPkxLJWfBwQmfEAE1Z7ONdDLqrN38tNFfI=
+diff --git a/staging/src/k8s.io/client-go/tools/record/event.go b/staging/src/k8s.io/client-go/tools/record/event.go
+index 998bf8dfb65..cd4c6de6a76 100644
+--- a/staging/src/k8s.io/client-go/tools/record/event.go
++++ b/staging/src/k8s.io/client-go/tools/record/event.go
+@@ -21,6 +21,7 @@ import (
+ 	"math/rand"
  	"time"
  
 +	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
- 	"github.com/go-logr/logr"
+ 	v1 "k8s.io/api/core/v1"
+ 	"k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+@@ -344,6 +345,8 @@ func (recorder *recorderImpl) generateEvent(object runtime.Object, annotations m
+ 	event := recorder.makeEvent(ref, annotations, eventtype, reason, message)
+ 	event.Source = recorder.source
  
- 	"k8s.io/klog/v2/internal/buffer"
-@@ -1480,6 +1481,7 @@ func InfofDepth(depth int, format string, args ...interface{}) {
- // output:
- // >> I1025 00:15:15.525108       1 controller_utils.go:116] "Pod status updated" pod="kubedns" status="ready"
- func InfoS(msg string, keysAndValues ...interface{}) {
-+	lttng.TraceKlog(msg, "")
- 	logging.infoS(logging.logger, logging.filter, 0, msg, keysAndValues...)
++	lttngCtx := lttng.ReportStart(fmt.Sprintf("Source: %s, Type: %s, Reason: %s, Message: %s", recorder.source, eventtype, reason, message), "start of kubelet")
++	defer lttngCtx.End("End of run")
+ 	// NOTE: events should be a non-blocking operation, but we also need to not
+ 	// put this in a goroutine, otherwise we'll race to write to a closed channel
+ 	// when we go to shut down this broadcaster.  Just drop events if we get overloaded,
+diff --git a/vendor/golang.org/x/net/context/ctxhttp/ctxhttp.go b/vendor/golang.org/x/net/context/ctxhttp/ctxhttp.go
+index 37dc0cfdb5b..06beb505cea 100644
+--- a/vendor/golang.org/x/net/context/ctxhttp/ctxhttp.go
++++ b/vendor/golang.org/x/net/context/ctxhttp/ctxhttp.go
+@@ -11,6 +11,8 @@ import (
+ 	"net/http"
+ 	"net/url"
+ 	"strings"
++
++	lttng "github.com/BenjaminSaintCyr/k8s-lttng-tpp"
+ )
+ 
+ // Do sends an HTTP request with the provided http.Client and returns
+@@ -21,6 +23,7 @@ import (
+ // The provided ctx must be non-nil. If it is canceled or times out,
+ // ctx.Err() will be returned.
+ func Do(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
++	lttngCtx := lttng.ReportStart(req.Method, req.URL.String())
+ 	if client == nil {
+ 		client = http.DefaultClient
+ 	}
+@@ -34,6 +37,7 @@ func Do(ctx context.Context, client *http.Client, req *http.Request) (*http.Resp
+ 		default:
+ 		}
+ 	}
++	lttngCtx.End(err.Error())
+ 	return resp, err
  }
  

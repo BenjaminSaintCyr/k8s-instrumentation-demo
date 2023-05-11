@@ -67,6 +67,7 @@ trace:
 	lttng enable-event -k -a
 	lttng add-context -u -t vpid -t vtid -t procname
 	lttng add-context -k -t pid -t tid -t procname
+	lttng add-context -k -t vpid -t vtid -t cgroup_ns # namespace context
 	lttng start
 
 run: etcd
