@@ -371,7 +371,7 @@ index 9dad22b0b3e..84adab25400 100644
  
  		case update.WorkType == TerminatedPodWork:
  			// we can shut down the worker
-+			ctxTerminated := lttng.ReportStart("Terminaed", string(pod.UID))
++			ctxTerminated := lttng.ReportStart("Terminated", fmt.Sprintf("UID: %s, Name: %s", string(pod.UID), pod.Name))
  			p.completeTerminated(pod)
 +			ctxTerminated.End("")
  			if start := update.Options.StartTime; !start.IsZero() {
@@ -409,7 +409,7 @@ index db21b59da4d..53625b4e036 100644
  			pod.Annotations[k] = v
  		}
 +
-+		ctx := lttng.ReportStart(string(api.PodScheduled), string(pod.UID))
++		ctx := lttng.ReportStart("Condition", fmt.Sprintf("Type: %s, UID: %s, Name: %s", string(api.PodScheduled), string(pod.UID), pod.Name))
  		podutil.UpdatePodCondition(&pod.Status, &api.PodCondition{
  			Type:   api.PodScheduled,
  			Status: api.ConditionTrue,
@@ -485,8 +485,8 @@ index 998bf8dfb65..cd4c6de6a76 100644
  	event := recorder.makeEvent(ref, annotations, eventtype, reason, message)
  	event.Source = recorder.source
  
-+	lttngCtx := lttng.ReportStart(fmt.Sprintf("Source: %s, Type: %s, Reason: %s, Message: %s", recorder.source, eventtype, reason, message), "start of kubelet")
-+	defer lttngCtx.End("End of run")
++	lttngCtx := lttng.ReportStart("Event", fmt.Sprintf("Source: %s, Type: %s, Reason: %s, Message: %s, UID: %s, Name: %s", recorder.source, eventtype, reason, message, string(event.InvolvedObject.UID), event.InvolvedObject.Name))
++	defer lttngCtx.End("")
  	// NOTE: events should be a non-blocking operation, but we also need to not
  	// put this in a goroutine, otherwise we'll race to write to a closed channel
  	// when we go to shut down this broadcaster.  Just drop events if we get overloaded,
