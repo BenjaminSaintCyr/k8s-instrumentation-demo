@@ -62,10 +62,14 @@ update-patch: k8s/
 
 trace:
 	-lttng-sessiond --daemonize
-	lttng create kubelet-tracing
-	lttng enable-event -u -a
-	lttng enable-event -k -a
+	lttng create kube-tracing
+	lttng enable-channel --kernel kube-channel --num-subbuf=4 --subbuf-size=32M
+	lttng enable-channel --userspace kube-channel --num-subbuf=4 --subbuf-size=32M
+	lttng enable-event -u -a -c kube-channel
 	lttng add-context -u -t vpid -t vtid -t procname
+	lttng enable-event -k -c kube-channel --tracepoint sched*
+	lttng enable-event -k -c kube-channel --tracepoint irq*
+	lttng enable-event -k -c kube-channel --syscall entry*
 	lttng add-context -k -t pid -t tid -t procname
 	lttng add-context -k -t vpid -t vtid -t cgroup_ns # namespace context
 	lttng start
